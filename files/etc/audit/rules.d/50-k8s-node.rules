@@ -1,0 +1,16 @@
+## Kubernetes node audit rules (loaded by augenrules at boot)
+-w /etc/kubernetes/ -p wa -k k8s-config
+-w /var/lib/kubelet/config.yaml -p wa -k kubelet-config
+-w /etc/crio/ -p wa -k crio-config
+-w /etc/containers/ -p wa -k containers-config
+-w /etc/ssh/sshd_config -p wa -k sshd-config
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd-config
+-w /etc/sudoers -p wa -k privilege
+-w /etc/sudoers.d/ -p wa -k privilege
+-w /var/log/sudo.log -p wa -k privilege
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k kernel-modules
+-a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root-commands
+-a always,exit -F arch=b64 -S mount,umount2 -F auid>=1000 -F auid!=unset -k mounts

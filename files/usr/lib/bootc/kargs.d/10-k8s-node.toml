@@ -1,0 +1,2 @@
+# Applied by bootc at install and diffed on every upgrade.
+kargs = ["audit=1", "audit_backlog_limit=8192", "slab_nomerge", "init_on_alloc=1", "page_alloc.shuffle=1", "randomize_kstack_offset=on", "console=tty0"]

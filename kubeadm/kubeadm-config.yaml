@@ -1,0 +1,108 @@
+# kubeadm config for the FIRST control-plane node.
+# Check the current API version with: kubeadm config print init-defaults
+# Replace: 10.0.10.11 (this node), k8s-api.example.internal (LB/VIP DNS name),
+#          registry.example.internal (mirror), clusterName.
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: 10.0.10.11
+  bindPort: 6443
+nodeRegistration:
+  criSocket: unix:///var/run/crio/crio.sock
+  kubeletExtraArgs:
+    - name: node-ip
+      value: 10.0.10.11
+# Cilium replaces kube-proxy (drop this if you use Calico or another CNI with kube-proxy)
+skipPhases:
+  - addon/kube-proxy
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+clusterName: prod-a
+kubernetesVersion: v1.37.1
+controlPlaneEndpoint: k8s-api.example.internal:6443
+# imageRepository: registry.example.internal/mirror/registry.k8s.io  # air-gapped only
+networking:
+  podSubnet: 10.244.0.0/16
+  serviceSubnet: 10.96.0.0/12
+  dnsDomain: cluster.local
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+    extraArgs:
+      - name: quota-backend-bytes
+        value: "8589934592"          # 8 GiB, etcd's recommended maximum
+      - name: auto-compaction-mode
+        value: periodic
+      - name: auto-compaction-retention
+        value: "1h"
+apiServer:
+  certSANs:
+    - k8s-api.example.internal
+    - 10.0.10.10
+  extraArgs:
+    - name: profiling
+      value: "false"
+    - name: audit-policy-file
+      value: /etc/kubernetes/audit/policy.yaml
+    - name: audit-log-path
+      value: /var/log/kubernetes/audit/audit.log
+    - name: audit-log-maxage
+      value: "30"
+    - name: audit-log-maxbackup
+      value: "10"
+    - name: audit-log-maxsize
+      value: "100"
+    - name: tls-min-version
+      value: VersionTLS12
+  extraVolumes:
+    - name: audit-policy
+      hostPath: /etc/kubernetes/audit
+      mountPath: /etc/kubernetes/audit
+      readOnly: true
+      pathType: DirectoryOrCreate
+    - name: audit-log
+      hostPath: /var/log/kubernetes/audit
+      mountPath: /var/log/kubernetes/audit
+      readOnly: false
+      pathType: DirectoryOrCreate
+controllerManager:
+  extraArgs:
+    - name: profiling
+      value: "false"
+    - name: terminated-pod-gc-threshold
+      value: "1000"
+scheduler:
+  extraArgs:
+    - name: profiling
+      value: "false"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd
+containerRuntimeEndpoint: unix:///var/run/crio/crio.sock
+failSwapOn: true
+protectKernelDefaults: true      # sysctls are set in /usr/lib/sysctl.d/90-kubernetes.conf
+readOnlyPort: 0
+seccompDefault: true
+rotateCertificates: true
+serverTLSBootstrap: true         # serving certs via CSR: approve them (see guide)
+tlsMinVersion: VersionTLS12
+containerLogMaxSize: 20Mi
+containerLogMaxFiles: 5
+imageGCHighThresholdPercent: 80
+imageGCLowThresholdPercent: 70
+evictionHard:
+  memory.available: "500Mi"
+  nodefs.available: "10%"
+  nodefs.inodesFree: "5%"
+  imagefs.available: "15%"
+systemReserved:
+  cpu: 500m
+  memory: 1Gi
+  ephemeral-storage: 5Gi
+kubeReserved:
+  cpu: 250m
+  memory: 1Gi
+shutdownGracePeriod: 60s
+shutdownGracePeriodCriticalPods: 20s

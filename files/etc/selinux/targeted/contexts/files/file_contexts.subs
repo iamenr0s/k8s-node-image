@@ -1,0 +1,5 @@
+# /home -> var/home on bootc, but the policy only aliases /var/run and /var/lock, so
+# everything under /var/home was labelled var_t and sshd (enforcing) could not read
+# ~/.ssh/authorized_keys. Label /var/home like /home. Verified 2026-09-30 by vm-test:
+# AVC denied { read } sshd-session authorized_keys var_t.
+/var/home /home

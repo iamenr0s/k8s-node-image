@@ -1,0 +1,15 @@
+{
+  "default": [{ "type": "insecureAcceptAnything" }],
+  "transports": {
+    "docker": {
+      "registry.example.internal/platform/k8s-node": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/containers/k8s-node-cosign.pub",
+          "signedIdentity": { "type": "matchRepository" }
+        }
+      ]
+    },
+    "docker-daemon": { "": [{ "type": "insecureAcceptAnything" }] }
+  }
+}

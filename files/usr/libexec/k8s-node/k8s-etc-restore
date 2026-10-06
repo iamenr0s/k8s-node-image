@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Runs before crio/kubelet on the first boot after k8s-safe-rollback.
+set -euo pipefail
+state=/var/lib/k8s-node
+snap="${state}/etc-kubernetes.snapshot"
+if [ -d "${snap}" ]; then
+  rm -rf /etc/kubernetes
+  cp -a "${snap}" /etc/kubernetes
+  restorecon -RF /etc/kubernetes
+  echo "restored /etc/kubernetes from ${snap}"
+fi
+rm -f "${state}/restore-pending"

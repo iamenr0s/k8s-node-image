@@ -1,0 +1,64 @@
+# bootc-image-builder: Kubernetes CONTROL-PLANE disk image (qcow2 / raw / vmdk / ami)
+# "small" profile; see the sizing tables in the guide for medium/large.
+
+# Break-glass admin (public key only; the image itself carries no keys).
+[[customizations.user]]
+name = "k8sadmin"
+key = "@SSH_PUBKEY@"
+groups = ["wheel"]
+
+[[customizations.disk.partitions]]
+type = "plain"
+label = "boot"
+mountpoint = "/boot"
+fs_type = "xfs"
+minsize = "1 GiB"
+
+[[customizations.disk.partitions]]
+type = "lvm"
+name = "vg_node"
+minsize = "120 GiB"
+
+[[customizations.disk.partitions.logical_volumes]]
+name = "root"
+label = "root"
+mountpoint = "/"
+fs_type = "xfs"
+minsize = "25 GiB"
+
+[[customizations.disk.partitions.logical_volumes]]
+name = "log"
+label = "log"
+mountpoint = "/var/log"
+fs_type = "xfs"
+minsize = "10 GiB"
+
+[[customizations.disk.partitions.logical_volumes]]
+name = "containers"
+label = "containers"
+mountpoint = "/var/lib/containers"
+fs_type = "xfs"
+minsize = "40 GiB"
+
+[[customizations.disk.partitions.logical_volumes]]
+name = "kubelet"
+label = "kubelet"
+mountpoint = "/var/lib/kubelet"
+fs_type = "xfs"
+minsize = "15 GiB"
+
+[[customizations.disk.partitions.logical_volumes]]
+name = "data"
+label = "data"
+mountpoint = "/var/data"
+fs_type = "xfs"
+minsize = "8 GiB"
+
+# etcd: small but latency-critical. For medium/large clusters put it on a
+# dedicated disk instead (see guide, "etcd storage").
+[[customizations.disk.partitions.logical_volumes]]
+name = "etcd"
+label = "etcd"
+mountpoint = "/var/lib/etcd"
+fs_type = "xfs"
+minsize = "15 GiB"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for node OS image updates
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=6h
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

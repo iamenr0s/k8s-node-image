@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Planned single-node rollback that keeps Kubernetes state intact.
+# bootc rollback returns /etc to the older deployment's copy, which would also
+# roll back /etc/kubernetes (certs, kubeconfigs, static-pod manifests). Snapshot
+# it into /var (shared by all deployments) and restore it on the next boot.
+# Usage: drain the node first, then: sudo k8s-safe-rollback && sudo systemctl reboot
+set -euo pipefail
+state=/var/lib/k8s-node
+mkdir -p "${state}"
+rm -rf "${state}/etc-kubernetes.snapshot"
+if [ -d /etc/kubernetes ]; then
+  cp -a /etc/kubernetes "${state}/etc-kubernetes.snapshot"
+  touch "${state}/restore-pending"
+fi
+# Stop the update timer from re-staging the image we are leaving.
+touch "${state}/hold"
+bootc rollback
+echo "Rollback queued (update hold set: rm ${state}/hold to resume updates)."
+echo "Reboot now: systemctl reboot"

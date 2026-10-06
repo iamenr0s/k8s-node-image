@@ -1,0 +1,107 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits"
+  ],
+  "timezone": "Europe/London",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Base image digest (ARG BASE_IMAGE=repo:tag@sha256:...)",
+      "managerFilePatterns": [
+        "/^Containerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)\\nARG BASE_IMAGE=\\S+?:(?<currentValue>[^@\\s]+)(@(?<currentDigest>sha256:[a-f0-9]+))?"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Kubernetes patch pin (ARG K8S_VERSION) and workflow env",
+      "managerFilePatterns": [
+        "/^Containerfile$/",
+        "/^\\.github/workflows/k8s-node\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-releases) depName=(?<depName>kubernetes/kubernetes)\\nARG K8S_VERSION=(?<currentValue>\\S+)",
+        "K8S_VERSION: (?<currentValue>\\d+\\.\\d+\\.\\d+)(?<depName>)(?<datasource>)"
+      ],
+      "depNameTemplate": "kubernetes/kubernetes",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Pinned tool versions in scripts",
+      "managerFilePatterns": [
+        "/^scripts/install-(scanners|cosign)\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n[A-Z_]+_VERSION=\"?\\$?\\{?[A-Z_]*:?-?(?<currentValue>[0-9][^\"}\\s]*)"
+      ],
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "GitHub Actions: one weekly PR, SHA-pinned with version comments",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Vulnerability scanners: grouped so the CVE gate is validated against both at once",
+      "matchDepNames": [
+        "anchore/grype",
+        "aquasecurity/trivy"
+      ],
+      "groupName": "vulnerability scanners"
+    },
+    {
+      "description": "Runner images: amd64 and arm64 must move together, but the arm64 label sits in a runs-on expression Renovate can't update. Bump both by hand.",
+      "matchDatasources": [
+        "github-runners"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Kubernetes: patches only. Minor upgrades are a deliberate, drained kubeadm procedure.",
+      "matchDepNames": [
+        "kubernetes/kubernetes"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Automerge base digests and patch updates once the full pipeline (build, CVE gate, boot test) is green",
+      "matchUpdateTypes": [
+        "patch",
+        "digest",
+        "pinDigest"
+      ],
+      "automerge": true,
+      "platformAutomerge": true
+    }
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "vulnerabilityAlerts": {
+    "schedule": [
+      "at any time"
+    ],
+    "labels": [
+      "dependencies",
+      "security"
+    ]
+  }
+}

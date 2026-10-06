@@ -1,0 +1,8 @@
+enable crio.service
+enable kubelet.service
+enable auditd.service
+enable k8s-etc-restore.service
+enable k8s-node-update.timer
+enable etcd-snapshot.timer
+# bootc's own timer upgrades AND reboots without draining the node.
+disable bootc-fetch-apply-updates.timer

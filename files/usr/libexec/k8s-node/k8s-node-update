@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Stage the newest image for the tracked tag, but never reboot. When a new
+# deployment is staged, write /run/reboot-required so the cluster's reboot
+# coordinator (kured) drains and reboots nodes one at a time.
+set -euo pipefail
+state=/var/lib/k8s-node
+if [ -e "${state}/hold" ]; then
+  echo "update hold present (${state}/hold): skipping"; exit 0
+fi
+bootc upgrade --quiet
+if bootc status --format=json | tr -d ' \n\t' | grep -q '"staged":null'; then
+  echo "no staged deployment"
+else
+  echo "new deployment staged; requesting coordinated reboot"
+  touch /run/reboot-required
+fi

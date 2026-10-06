@@ -1,0 +1,9 @@
+[Unit]
+Description=etcd snapshot (control-plane nodes only)
+ConditionPathExists=/etc/kubernetes/manifests/etcd.yaml
+After=crio.service kubelet.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/k8s-node/etcd-snapshot.env
+ExecStart=/usr/libexec/k8s-node/etcd-snapshot

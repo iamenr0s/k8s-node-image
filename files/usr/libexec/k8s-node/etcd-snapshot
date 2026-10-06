@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Local etcd snapshot on control-plane nodes, using etcdctl from the same etcd
+# image the static pod runs (already in the shared containers-storage).
+# Keeps the last ${KEEP:-7} snapshots. Ship them off-node with OFFSITE_CMD
+# (e.g. an rclone/aws s3 cp command) set in /etc/k8s-node/etcd-snapshot.env.
+set -euo pipefail
+manifest=/etc/kubernetes/manifests/etcd.yaml
+dest=/var/lib/etcd-backup
+img="$(sed -n 's/^[[:space:]]*image:[[:space:]]*//p' "${manifest}" | head -1)"
+[ -n "${img}" ] || { echo "no etcd image in ${manifest}" >&2; exit 1; }
+ts="$(date -u +%Y%m%dT%H%M%SZ)"
+podman run --rm --network host --security-opt label=disable \
+  -v /etc/kubernetes/pki/etcd:/pki:ro -v "${dest}:/backup" \
+  --entrypoint /usr/local/bin/etcdctl "${img}" \
+  --endpoints=https://127.0.0.1:2379 --cacert=/pki/ca.crt \
+  --cert=/pki/healthcheck-client.crt --key=/pki/healthcheck-client.key \
+  snapshot save "/backup/snapshot-${ts}.db"
+chmod 0600 "${dest}/snapshot-${ts}.db"
+sha256sum "${dest}/snapshot-${ts}.db" > "${dest}/snapshot-${ts}.db.sha256"
+# shellcheck disable=SC2012  # names are fixed-format timestamps
+ls -1t "${dest}"/snapshot-*.db | tail -n +"$(( ${KEEP:-7} + 1 ))" | while read -r old; do
+  rm -f "${old}" "${old}.sha256"
+done
+if [ -n "${OFFSITE_CMD:-}" ]; then
+  # shellcheck disable=SC2086  # OFFSITE_CMD is an operator-supplied command line
+  ${OFFSITE_CMD} "${dest}/snapshot-${ts}.db"
+fi

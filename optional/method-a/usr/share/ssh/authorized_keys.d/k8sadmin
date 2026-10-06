@@ -1,0 +1,2 @@
+# Image-owned keys (read-only on hosts; rotate by releasing a new image)
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIReplaceWithRealPublicKey000000000000000 ops-team@example.com

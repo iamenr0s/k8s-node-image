@@ -1,0 +1,42 @@
+# OS-specific junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor/IDE
+.idea/
+.vscode/
+.trae
+
+# Temporary files
+*.swp
+*.swo
+*.tmp
+*.temp
+*~
+*.bak
+*.old
+tmp/
+temp/
+
+# bootc-image-builder outputs
+output/
+*.qcow2
+*.raw
+*.iso
+*.vmdk
+*.zst
+
+# Claude Code
+.claude/
+.remember/
+CLAUDE.md
+docs/
+tasks/
+graphify-out/
+
+# Build outputs (if any)
+dist/
+build/
+keys/
+output/

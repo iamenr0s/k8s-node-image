@@ -1,0 +1,7 @@
+# Accounts are key-only with locked passwords (and passwd is not setuid in
+# bootc-images), so wheel members cannot type a sudo password. Grant sudo
+# without one, and make every session auditable.
+Defaults use_pty
+Defaults logfile=/var/log/sudo.log
+Defaults log_input, log_output
+%wheel ALL=(ALL) NOPASSWD: ALL

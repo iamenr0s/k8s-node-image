@@ -1,0 +1,8 @@
+[Unit]
+Description=Stage a new node OS image (no reboot)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/k8s-node/k8s-node-update

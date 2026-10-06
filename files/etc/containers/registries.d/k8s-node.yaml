@@ -1,0 +1,5 @@
+# Fetch sigstore signatures for the node OS image from the registry
+# (cosign stores them as OCI attachments next to the image).
+docker:
+  registry.example.internal/platform/k8s-node:
+    use-sigstore-attachments: true

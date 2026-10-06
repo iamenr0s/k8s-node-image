@@ -1,0 +1,62 @@
+# bootc-image-builder: unattended installer ISO (anaconda-iso).
+# Rendered by scripts/disk.sh: @DEFAULT_ROLE@ (worker|controlplane),
+# @SSH_PUBKEY@ (break-glass key), @TRACK_REF@ (registry ref hosts update from).
+# The container image is embedded in the ISO: installs work offline.
+# bootc-image-builder adds the `ostreecontainer` line itself. User accounts
+# must be created here, not with [[customizations.user]] (the two conflict).
+[customizations.installer.kickstart]
+contents = '''
+text --non-interactive
+lang en_US.UTF-8
+keyboard us
+timezone Etc/UTC --utc
+network --bootproto=dhcp --device=link --activate --onboot=on
+rootpw --lock
+user --name=k8sadmin --groups=wheel --lock
+sshkey --username=k8sadmin "@SSH_PUBKEY@"
+zerombr
+%include /tmp/part.ks
+reboot --eject
+
+%pre --interpreter=/bin/bash --log=/tmp/ks-pre.log
+set -eu
+# Role: build-time default, overridable at boot with k8s.role=controlplane|worker
+role="@DEFAULT_ROLE@"
+read -ra cmdline < /proc/cmdline
+for arg in "${cmdline[@]}"; do
+  case "${arg}" in k8s.role=*) role="${arg#k8s.role=}" ;; esac
+done
+# Target: first non-removable, non-USB disk of at least 240 GiB (sum of the LVs below)
+min=$((240 * 1024 * 1024 * 1024))
+disk=""
+while read -r name type rm size tran; do
+  if [ "${type}" = disk ] && [ "${rm}" = 0 ] && [ "${size}" -ge "${min}" ] && [ "${tran:-}" != usb ]; then
+    disk="${name}"; break
+  fi
+done < <(lsblk -dnbo NAME,TYPE,RM,SIZE,TRAN)
+[ -n "${disk}" ] || { echo "no disk >= 240 GiB found" >&2; exit 1; }
+{
+  echo "ignoredisk --only-use=${disk}"
+  echo "clearpart --all --initlabel --disklabel=gpt --drives=${disk}"
+  echo "reqpart --add-boot"
+  echo "part pv.01 --ondisk=${disk} --size=1 --grow"
+  echo "volgroup vg_node pv.01"
+  echo "logvol /                   --vgname=vg_node --name=root       --fstype=xfs --size=30720"
+  echo "logvol /var/log            --vgname=vg_node --name=log        --fstype=xfs --size=20480 --fsoptions=nodev,nosuid,noexec"
+  echo "logvol /var/lib/containers --vgname=vg_node --name=containers --fstype=xfs --size=102400"
+  echo "logvol /var/lib/kubelet    --vgname=vg_node --name=kubelet    --fstype=xfs --size=51200"
+  if [ "${role}" = controlplane ]; then
+    echo "logvol /var/lib/etcd       --vgname=vg_node --name=etcd       --fstype=xfs --size=20480 --fsoptions=nodev,nosuid,noexec"
+  fi
+  echo "logvol /var/data           --vgname=vg_node --name=data       --fstype=xfs --size=10240 --grow"
+} > /tmp/part.ks
+echo "role=${role} disk=${disk}"
+%end
+
+%post --log=/root/ks-post.log
+# Hosts update from the registry, not from the image embedded in the ISO.
+bootc switch --mutate-in-place --transport registry @TRACK_REF@
+# Bare metal has no cloud metadata service: skip cloud-init's datasource probing.
+touch /etc/cloud/cloud-init.disabled
+%end
+'''

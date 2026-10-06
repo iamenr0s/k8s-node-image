@@ -1,0 +1,4 @@
+# Requires "Require review from Code Owners" in branch protection to take effect.
+# Everything that can change what gets built, gated or published needs owner review
+# (a push to main publishes images).
+*    @iamenr0s

@@ -1,0 +1,13 @@
+# Gate on OS (RPM) packages only, matching grype's go-module ignore under /usr
+# (see grype.yaml). Go modules compiled into RPM-owned binaries (CNI plugins, runc,
+# crio, kubelet, kubeadm) are fixable only by an upstream rebuild; scan.sh passes
+# --pkg-types os. Review 2026-10-25: drop the flag once upstream ships rebuilt RPMs.
+severity:
+  - HIGH
+  - CRITICAL
+vulnerability:
+  ignore-unfixed: true
+scan:
+  scanners:
+    - vuln
+    - secret

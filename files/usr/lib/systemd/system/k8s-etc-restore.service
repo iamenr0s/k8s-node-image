@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore /etc/kubernetes after k8s-safe-rollback
+ConditionPathExists=/var/lib/k8s-node/restore-pending
+After=local-fs.target systemd-tmpfiles-setup.service
+Before=crio.service kubelet.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/k8s-node/k8s-etc-restore
+
+[Install]
+WantedBy=multi-user.target

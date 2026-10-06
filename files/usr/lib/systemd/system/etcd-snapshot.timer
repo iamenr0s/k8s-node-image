@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic etcd snapshot
+
+[Timer]
+OnCalendar=*-*-* 00/6:15:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

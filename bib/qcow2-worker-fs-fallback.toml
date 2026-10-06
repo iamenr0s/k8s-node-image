@@ -1,0 +1,26 @@
+# Fallback for bootc-image-builder releases without [customizations.disk]:
+# plain filesystem customizations (allowed: "/", "/boot", and /var subdirectories).
+[[customizations.user]]
+name = "k8sadmin"
+key = "@SSH_PUBKEY@"
+groups = ["wheel"]
+
+[[customizations.filesystem]]
+mountpoint = "/"
+minsize = "25 GiB"
+
+[[customizations.filesystem]]
+mountpoint = "/var/log"
+minsize = "10 GiB"
+
+[[customizations.filesystem]]
+mountpoint = "/var/lib/containers"
+minsize = "40 GiB"
+
+[[customizations.filesystem]]
+mountpoint = "/var/lib/kubelet"
+minsize = "15 GiB"
+
+[[customizations.filesystem]]
+mountpoint = "/var/data"
+minsize = "8 GiB"

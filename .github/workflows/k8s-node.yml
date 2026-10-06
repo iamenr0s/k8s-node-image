@@ -1,0 +1,331 @@
+name: k8s-node
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "47 6 * * *"   # after bootc-images' 05:17 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-node-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  K8S_MINOR: v1.37
+  K8S_VERSION: 1.37.1
+  CRIO_MINOR: v1.37
+  # Pin both by digest (image@sha256:...) and let Renovate bump them.
+  BASE_IMAGE: quay.io/iamenr0s/rockylinux-hardened-bootc:10
+  BIB_IMAGE: quay.io/centos-bootc/bootc-image-builder:latest
+  REGISTRY: ghcr.io
+  LOCAL: localhost/k8s-node:ci
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck
+        run: shellcheck -x scripts/*.sh files/usr/libexec/k8s-node/*
+      - name: actionlint
+        run: docker run --rm -v "${PWD}:/repo" -w /repo docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+      - name: hadolint
+        run: docker run --rm -i docker.io/hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Containerfile
+      - name: grype ignores have not expired
+        run: |
+          scripts/check-policy-dates.sh policies/grype.yaml
+          scripts/check-policy-dates.sh policies/trivy.yaml
+
+  # 1. Build + lint + CVE gate + SBOM, natively per architecture
+  build:
+    needs: lint
+    name: build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build (ends with bootc container lint)
+        run: sudo --preserve-env=BASE_IMAGE,K8S_MINOR,K8S_VERSION,CRIO_MINOR scripts/build.sh "${LOCAL}"
+
+      - name: Vulnerability scan (no fixable High/Critical)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo --preserve-env=GH_TOKEN scripts/install-scanners.sh
+          sudo podman save --format oci-dir -o "${RUNNER_TEMP}/oci" "${LOCAL}"
+          sudo chown -R "$(id -u)" "${RUNNER_TEMP}/oci"
+          scripts/scan.sh "${RUNNER_TEMP}/oci"
+
+      - name: SBOM + export
+        run: |
+          mkdir -p "${RUNNER_TEMP}/out"
+          trivy image --input "${RUNNER_TEMP}/oci" --format cyclonedx \
+            --output "${RUNNER_TEMP}/out/sbom-${ARCH}.cdx.json"
+          sudo podman save --format oci-archive -o "${RUNNER_TEMP}/out/k8s-node-${ARCH}.tar" "${LOCAL}"
+          sudo chown -R "$(id -u)" "${RUNNER_TEMP}/out"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/out/
+          compression-level: 0
+          retention-days: 1   # inter-job hand-off only; cleanup deletes on success
+
+  # 2. Disk artifacts: QCOW2 and unattended ISO, per arch and node role
+  disk:
+    needs: build
+    name: disk (${{ matrix.arch }}, ${{ matrix.role }}, ${{ matrix.type }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        role: [worker, controlplane]
+        type: [qcow2, anaconda-iso]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 90
+    env:
+      ARCH: ${{ matrix.arch }}
+      ROLE: ${{ matrix.role }}
+      TYPE: ${{ matrix.type }}
+      PUBKEY: ${{ vars.BREAKGLASS_SSH_PUBKEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/in
+
+      - name: Load image under the ref hosts will track
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "TRACK_REF=${REGISTRY}/${owner}/k8s-node:${K8S_MINOR#v}" >> "${GITHUB_ENV}"
+          sudo podman load -i "${RUNNER_TEMP}/in/k8s-node-${ARCH}.tar"
+          sudo podman tag "${LOCAL}" "${REGISTRY}/${owner}/k8s-node:${K8S_MINOR#v}"
+
+      - name: Break-glass public key
+        run: |
+          mkdir -p keys
+          if [ -n "${PUBKEY}" ]; then
+            printf '%s\n' "${PUBKEY}" > keys/k8sadmin_ed25519.pub
+          else
+            echo "::warning::vars.BREAKGLASS_SSH_PUBKEY unset; using a throwaway key"
+            ssh-keygen -q -t ed25519 -N '' -C ci-throwaway -f keys/k8sadmin_ed25519
+          fi
+
+      - name: bootc-image-builder
+        run: |
+          sudo --preserve-env=BIB_IMAGE,TRACK_REF scripts/disk.sh \
+            "${TYPE}" "${ROLE}" "${TRACK_REF}" "${RUNNER_TEMP}/disk"
+
+      - name: Validate and package artifact
+        run: |
+          sudo apt-get install -yq --no-install-recommends qemu-utils xorriso zstd >/dev/null
+          cd "${RUNNER_TEMP}/disk"
+          if [ "${TYPE}" = qcow2 ]; then
+            src="$(sudo find . -name disk.qcow2)"; ext=qcow2
+            sudo qemu-img check "${src}"
+            sudo qemu-img info "${src}"
+          else
+            src="$(sudo find . -name install.iso)"; ext=iso
+            sudo xorriso -indev "${src}" -toc 2>&1 | tail -5
+            sudo xorriso -indev "${src}" -ls / 2>/dev/null | grep -i '\.ks' || { echo "no kickstart embedded" >&2; exit 1; }
+          fi
+          name="k8s-node-${K8S_VERSION}-${ROLE}-${ARCH}.${ext}"
+          sudo mv "${src}" "${RUNNER_TEMP}/${name}"
+          sudo chown "$(id -u)" "${RUNNER_TEMP}/${name}"
+          zstd -q -T0 -10 --rm "${RUNNER_TEMP}/${name}"
+          ls -lh "${RUNNER_TEMP}/${name}.zst"
+
+      # Readers: validate (amd64 qcow2), validate-iso (amd64 worker ISO, not on PRs),
+      # release (everything, tags only). Other combinations are built and checked, not kept.
+      - if: >-
+          github.ref_type == 'tag' || (matrix.arch == 'amd64' && (matrix.type == 'qcow2' ||
+          (github.event_name != 'pull_request' && matrix.role == 'worker')))
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: disk-${{ matrix.arch }}-${{ matrix.role }}-${{ matrix.type }}
+          path: ${{ runner.temp }}/*.zst
+          compression-level: 0
+          retention-days: 1   # inter-job hand-off only; cleanup deletes on success
+
+  # 3. Boot the QCOW2 under KVM: key-only SSH, node checks, kubeadm smoke test
+  validate:
+    needs: disk
+    name: validate (amd64, ${{ matrix.role }})
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [worker, controlplane]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: disk-amd64-${{ matrix.role }}-qcow2
+          path: ${{ runner.temp }}/in
+      - name: Boot and test
+        env:
+          ROLE: ${{ matrix.role }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso zstd openssh-client
+          zstd -q -d "${RUNNER_TEMP}"/in/*.zst
+          smoke=0; [ "${ROLE}" = controlplane ] && smoke=1
+          sudo EXPECT_K8S="${K8S_VERSION}" ROLE="${ROLE}" KUBEADM_SMOKE="${smoke}" MEM=6144 \
+            scripts/vm-test.sh "$(ls "${RUNNER_TEMP}"/in/*.qcow2)"
+
+  # 3b. Unattended ISO install (slow: nightly, main and tags only)
+  validate-iso:
+    if: github.event_name != 'pull_request'
+    needs: disk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: disk-amd64-worker-anaconda-iso
+          path: ${{ runner.temp }}/in
+      - name: Install from ISO and boot
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends qemu-system-x86 qemu-utils ovmf zstd
+          zstd -q -d "${RUNNER_TEMP}"/in/*.zst
+          sudo scripts/iso-test.sh "$(ls "${RUNNER_TEMP}"/in/*.iso)"
+
+  # 4. Publish: per-arch images + manifest, signed, SBOM attested, promoted
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: [validate, validate-iso]
+    runs-on: ubuntu-24.04
+    environment: release          # holds COSIGN_PRIVATE_KEY / COSIGN_PASSWORD
+    permissions:
+      contents: read
+      packages: write
+    env:
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/in
+      - name: Install cosign
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sudo --preserve-env=GH_TOKEN scripts/install-cosign.sh
+      - name: Push, sign, attest, promote
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/k8s-node"
+          minor="${K8S_MINOR#v}"
+          imm="${K8S_VERSION}-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          mkdir -p ~/.docker
+          export REGISTRY_AUTH_FILE="${HOME}/.docker/config.json"   # shared by podman, skopeo, cosign
+          echo "${TOKEN}" | podman login "${REGISTRY}" -u "${GITHUB_ACTOR}" --password-stdin
+
+          for arch in amd64 arm64; do
+            podman load -i "${RUNNER_TEMP}/in/k8s-node-${arch}.tar"
+            podman push --digestfile "d-${arch}" "${LOCAL}" "docker://${repo}:${imm}-${arch}"
+            cosign sign --yes --key env://COSIGN_PRIVATE_KEY "${repo}@$(cat "d-${arch}")"
+            cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type cyclonedx \
+              --predicate "${RUNNER_TEMP}/in/sbom-${arch}.cdx.json" "${repo}@$(cat "d-${arch}")"
+            podman rmi "${LOCAL}"
+          done
+
+          podman manifest create "${repo}:${imm}" \
+            "docker://${repo}:${imm}-amd64" "docker://${repo}:${imm}-arm64"
+          podman manifest push --all --digestfile d-index "${repo}:${imm}" "docker://${repo}:${imm}"
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY "${repo}@$(cat d-index)"
+
+          # Promotion: tags move, digests (and their signatures) do not.
+          tags=("${minor}-edge")
+          [[ "${GITHUB_REF}" == refs/tags/v* ]] && tags+=("${minor}")
+          for t in "${tags[@]}"; do
+            skopeo copy --all --preserve-digests \
+              "docker://${repo}@$(cat d-index)" "docker://${repo}:${t}"
+          done
+          {
+            echo "### Published \`${repo}@$(cat d-index)\`"
+            echo "Tags: \`${imm}\` ${tags[*]/#/\`}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # 5. Release artifacts for version tags
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish, disk]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: disk-*
+          merge-multiple: true
+          path: dist
+      - name: Install cosign
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sudo --preserve-env=GH_TOKEN scripts/install-cosign.sh
+      - name: Checksums, signature, GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.zst > SHA256SUMS
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle SHA256SUMS.sigstore.json SHA256SUMS
+          # GitHub release assets are limited to 2 GiB each
+          for f in ./*.zst; do
+            if [ "$(stat -c %s "${f}")" -gt 2000000000 ]; then
+              split -b 1900M -d -a 2 "${f}" "${f}.part"; rm "${f}"
+            fi
+          done
+          gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes \
+            --notes "Verify: cosign verify-blob --key k8s-node-cosign.pub --bundle SHA256SUMS.sigstore.json SHA256SUMS && sha256sum -c SHA256SUMS. Split files: cat NAME.zst.part* > NAME.zst" \
+            ./*
+
+  # 6. Free artifact storage (~3-9 GB per run). Skipped on failure so `gh run rerun --failed`
+  #    still finds its inputs; retention-days: 1 covers that case.
+  cleanup:
+    needs: [validate, validate-iso, publish, release]
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Delete this run's artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            -q '.artifacts[].id' | while read -r id; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"
+          done
