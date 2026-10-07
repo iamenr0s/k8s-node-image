@@ -73,6 +73,24 @@ environment secrets `COSIGN_PRIVATE_KEY` and `COSIGN_PASSWORD`; nodes verify the
 via `files/etc/containers/policy.json`. Renovate bumps the base digest, Kubernetes *patch*
 releases, scanners, cosign and Actions; a Kubernetes minor is a deliberate, drained upgrade.
 
+### Cosign setup (one-time)
+
+```bash
+cosign generate-key-pair                      # writes cosign.key + cosign.pub; set a password
+cp cosign.pub files/etc/pki/containers/k8s-node-cosign.pub   # baked into the image, used by policy.json
+gh secret set COSIGN_PRIVATE_KEY --env release < cosign.key
+gh secret set COSIGN_PASSWORD    --env release   # prompts for the password
+shred -u cosign.key                           # keep only an offline backup
+```
+
+Rotating the key: repeat, commit the new `.pub`, and ship an image that carries it
+*before* publishing images signed with the new key (nodes verify with the key they already have).
+Verify a published image: `cosign verify --key cosign.pub ghcr.io/iamenr0s/k8s-node:<tag>`.
+
+**Repo recreated?** GHCR packages stay linked to the old repo, so `publish` fails with
+`StatusCode: 403` on push. Fix: package settings → *Manage Actions access* → add this repo
+as **Write** (or delete the package and let the next run recreate it).
+
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
